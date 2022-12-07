@@ -493,7 +493,7 @@ struct sock {
 	struct timer_list	sk_timer;
 
 	/* 
-	 * 计算出来是每秒钟的报文发送速率，和MSS以及RTT相关，可参见
+	 * 计算出来的每秒钟的报文发送速率，和MSS以及RTT相关，可参见
 	 * tcp_update_pacing_rate()
 	 */
 	unsigned long		sk_pacing_rate; /* bytes per second */
