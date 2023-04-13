@@ -1081,6 +1081,11 @@ static struct page *follow_page_mask(struct vm_area_struct *vma,
 
 	vma_pgtable_walk_begin(vma);
 
+	/* 根据地址找到对应的page页。这里会逐级进行页表的查找，从gpd->gud->gmd->gte
+	 * 一层一层地查找下去。这个过程中，是会进行页表的创建的，即如果页表还没有映射，
+	 * 那边会创建对应的项来完成映射。
+	 */
+
 	ctx->page_mask = 0;
 	pgd = pgd_offset(mm, address);
 
@@ -3350,6 +3355,9 @@ static unsigned long gup_fast(unsigned long start, unsigned long end,
 	    !gup_fast_permitted(start, end))
 		return 0;
 
+	/* 如果当前进程存在写保护，那么不能进行pin操作。存在写保护，说明存在其他的
+	 * 地方正在对这个进程的内存进行某种操作，
+	 */
 	if (gup_flags & FOLL_PIN) {
 		if (!raw_seqcount_try_begin(&current->mm->write_protect_seq, seq))
 			return 0;
@@ -3491,6 +3499,11 @@ EXPORT_SYMBOL_GPL(get_user_pages_fast_only);
 int get_user_pages_fast(unsigned long start, int nr_pages,
 			unsigned int gup_flags, struct page **pages)
 {
+	/* 这个函数用于在内核态获取用户态的地址对应一定数目的page，并将其固定在内核态。
+	 * 在查找过程中，遇到缺页的话，会进行pte的分配。注意：这里获取的都是当前进程
+	 * 的page。
+	 */
+
 	/*
 	 * The caller may or may not have explicitly set FOLL_GET; either way is
 	 * OK. However, internally (within mm/gup.c), gup fast variants must set
