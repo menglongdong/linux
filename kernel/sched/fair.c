@@ -1154,6 +1154,7 @@ static s64 update_curr_se(struct rq *rq, struct sched_entity *curr)
 
 static inline void update_curr_task(struct task_struct *p, s64 delta_exec)
 {
+	/* 更新当前进程运行时间的tracepoint点 */
 	trace_sched_stat_runtime(p, delta_exec);
 	account_group_exec_runtime(p, delta_exec);
 	cgroup_account_cputime(p, delta_exec);
