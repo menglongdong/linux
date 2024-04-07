@@ -1797,6 +1797,10 @@ static int vxlan_rcv(struct sock *sk, struct sk_buff *skb)
 		 *
 		 * 与此同时，这里会对csum进行pull，减去eth头部的数据，使得skb->csum
 		 * 变成L3层数据的csum。
+		 *
+		 * 同时，如果当前vxlan配置了学源标志，那么会将当前的vtep加入到当前
+		 * vxlan的fdb表中，下次发送报文的时候会直接发送给这个vtep。fdb表也
+		 * 可以使用bridge的fdb命令手动添加到vxlan上。
 		 */
 		reason = vxlan_set_mac(vxlan, vs, skb, vni);
 		if (reason)
@@ -2234,6 +2238,8 @@ static int vxlan_build_skb(struct sk_buff *skb, struct dst_entry *dst,
 	int err;
 	int type = udp_sum ? SKB_GSO_UDP_TUNNEL_CSUM : SKB_GSO_UDP_TUNNEL;
 	__be16 inner_protocol = htons(ETH_P_TEB);
+
+	/* 为vxlan报文头部开辟空间 */
 
 	if ((vxflags & VXLAN_F_REMCSUM_TX) &&
 	    skb->ip_summed == CHECKSUM_PARTIAL) {
@@ -2808,6 +2814,7 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 	}
 
 	eth = eth_hdr(skb);
+	/* 根据当前报文的mac地址来查找当前vxlan设备上的转发表 */
 	f = vxlan_find_mac(vxlan, eth->h_dest, vni);
 	did_rsc = false;
 
@@ -2834,6 +2841,9 @@ static netdev_tx_t vxlan_xmit(struct sk_buff *skb, struct net_device *dev)
 		}
 	}
 
+	/* 如果转发项配置了nh，就根据nh来进行转发；否则，取当前vxlan上所有的remotes
+	 * 来进行转发。
+	 */
 	if (rcu_access_pointer(f->nh)) {
 		vxlan_xmit_nh(skb, dev, f,
 			      (vni ? : vxlan->default_dst.remote_vni), did_rsc);

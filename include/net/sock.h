@@ -437,6 +437,9 @@ struct sock {
 
 	void			(*sk_data_ready)(struct sock *sk);
 	long			sk_rcvtimeo;
+	/* 设置一个阈值，只有当收到的数据量达到这个值的时候才会唤醒用户态进程收包，避免
+	 * 频繁的进程切换。
+	 */
 	int			sk_rcvlowat;
 	__cacheline_group_end(sock_read_rx);
 
@@ -538,6 +541,7 @@ struct sock {
 	struct proto		*sk_prot_creator;
 	rwlock_t		sk_callback_lock;
 	int			sk_err_soft;
+	/* 已连接但是还没有被accept（全连接）的套接口的数量 */
 	u32			sk_ack_backlog;
 	u32			sk_max_ack_backlog;
 	kuid_t			sk_uid;
