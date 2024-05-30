@@ -1190,6 +1190,9 @@ struct tcp_congestion_ops {
 /* fast path fields are put first to fill one cache line */
 
 	/* return slow start threshold (required) */
+	/* 计算慢启动阈值。在进入到RECOVERY状态的时候，也是调用这个函数来决定要回退的
+	 * 阈值的。
+	 */
 	u32 (*ssthresh)(struct sock *sk);
 
 	/* do new cwnd calculation (required) */
@@ -1300,6 +1303,7 @@ void tcp_rate_gen(struct sock *sk, u32 delivered, u32 lost,
 		  bool is_sack_reneg, struct rate_sample *rs);
 void tcp_rate_check_app_limited(struct sock *sk);
 
+/* 判断t1是在t2之后发送的 */
 static inline bool tcp_skb_sent_after(u64 t1, u64 t2, u32 seq1, u32 seq2)
 {
 	return t1 > t2 || (t1 == t2 && after(seq1, seq2));

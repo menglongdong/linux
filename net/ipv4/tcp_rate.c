@@ -37,6 +37,9 @@
 /* Snapshot the current delivery information in the skb, to generate
  * a rate sample later when the skb is (s)acked in tcp_rate_skb_delivered().
  */
+/* 成功发送skb（发送到L3）后会调用这个函数来更新rate，将套接口的一些rate信息保存到当前
+ * skb中。
+ */
 void tcp_rate_skb_sent(struct sock *sk, struct sk_buff *skb)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
@@ -76,6 +79,9 @@ void tcp_rate_skb_sent(struct sock *sk, struct sk_buff *skb)
  * called multiple times. We favor the information from the most recently
  * sent skb, i.e., the skb with the most recently sent time and the highest
  * sequence.
+ */
+/* 每一次数据被ack/sack的时候，会调用这个函数来更新rate。这里会去最新的（发送时间最晚
+ * 的）skb来更新rs。
  */
 void tcp_rate_skb_delivered(struct sock *sk, struct sk_buff *skb,
 			    struct rate_sample *rs)
@@ -143,6 +149,9 @@ void tcp_rate_gen(struct sock *sk, u32 delivered, u32 lost,
 		rs->interval_us = -1;
 		return;
 	}
+	/* 在tcp_rate_skb_delivered里面，会把最后一个发送的被确认的skb上保存的 delivered
+	 * 设置到rs->prior_delivered，这里的rs->delivered其实就是总共ack的数据数。
+	 */
 	rs->delivered   = tp->delivered - rs->prior_delivered;
 
 	rs->delivered_ce = tp->delivered_ce - rs->prior_delivered_ce;
@@ -190,7 +199,14 @@ void tcp_rate_gen(struct sock *sk, u32 delivered, u32 lost,
 	}
 }
 
-/* If a gap is detected between sends, mark the socket application-limited. */
+/* 每次调用sendmsg系统调用的时候，都会调用这个函数来检查是否发生了app limited。
+ * 如果发送队列（不包括重传队列）中的存量数据比mss小（或者发送队列中没有数据），
+ * 且没有数据在L3以下，且在外数据小于拥塞窗口，且所有的被标记为丢包的数据都已经发送
+ * 出去了，那么就说明是app限制了数据的发送。
+ * 
+ * 这里会把app_limited设置为：在外数据 + delivered。在最开始的时候，这个是0，因此
+ * 会去app_limited为1。
+ */
 void tcp_rate_check_app_limited(struct sock *sk)
 {
 	struct tcp_sock *tp = tcp_sk(sk);
