@@ -4960,6 +4960,9 @@ static int check_stack_write_fixed_off(struct bpf_verifier_env *env,
 			verbose(env, "invalid size of register spill\n");
 			return -EACCES;
 		}
+		/* 不能把指向栈的指针存储到不是当前栈帧的地方，比如不能把当前一个栈中
+		 * 的变量的地址存到上一个栈帧中。
+		 */
 		if (state != cur && reg->type == PTR_TO_STACK) {
 			verbose(env, "cannot spill pointers to stack into stack frame of the caller\n");
 			return -EINVAL;
@@ -16728,13 +16731,25 @@ static void merge_callee_effects(struct bpf_verifier_env *env, int t, int w)
  * 0x20 - explored
  */
 
+/* 在深度优先遍历过程中，用于标记insn的状态。其中，FALLTHROUGH代表当前指令不是跳转
+ * 指令，会执行下一条指令；BRANCH代表当前是跳转指令，且存在分支。
+ *
+ * 
+ */
+
 enum {
+	/* 代表当前指令被访问过，即在图中push过 */
 	DISCOVERED = 0x10,
+	/* 代表当前指令被pop过 */
 	EXPLORED = 0x20,
+	/* 下面两个代表着指令是否是branch，对于visited的指令，会有这两个标志之一 */
 	FALLTHROUGH = 1,
 	BRANCH = 2,
 };
 
+/* 非fallthrough类型的指令（条件跳转）会被标识为prune point；任何跳转指令跳转到
+ * 的指令也会被标记为prune point；任何函数调用指令的下一条指令也会被标记。
+ */
 static void mark_prune_point(struct bpf_verifier_env *env, int idx)
 {
 	env->insn_aux_data[idx].prune_point = true;
@@ -16779,6 +16794,9 @@ static int push_insn(int t, int w, int e, struct bpf_verifier_env *env)
 {
 	int *insn_stack = env->cfg.insn_stack;
 	int *insn_state = env->cfg.insn_state;
+
+	/* 对下一条指令进行入栈操作。如果当前的指令已经处理过了，那么就返回DONE_EXPLORING
+	 */
 
 	if (e == FALLTHROUGH && insn_state[t] >= (DISCOVERED | FALLTHROUGH))
 		return DONE_EXPLORING;
@@ -17126,7 +17144,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 	if (bpf_pseudo_func(insn))
 		return visit_func_call_insn(t, insns, env, true);
 
-	/* All non-branch instructions have a single fall-through edge. */
+	/* 对于非跳转类指令，直接当做 FALLTHROUGH 来处理，进行push操作。 */
 	if (BPF_CLASS(insn->code) != BPF_JMP &&
 	    BPF_CLASS(insn->code) != BPF_JMP32) {
 		insn_sz = bpf_is_ldimm64(insn) ? 2 : 1;
@@ -17185,6 +17203,7 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		return visit_func_call_insn(t, insns, env, insn->src_reg == BPF_PSEUDO_CALL);
 
 	case BPF_JA:
+		/* 对于跳转类指令，只能进行32位的imm跳转，不能根据寄存器跳转 */
 		if (BPF_SRC(insn->code) != BPF_K)
 			return -EINVAL;
 
@@ -17193,7 +17212,9 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		else
 			off = insn->imm;
 
-		/* unconditional jump with single edge */
+		/* 这里是无条件跳转，因此不会产生新的分支，是按照FALLTHROUGH的逻辑
+		 * 处理的。
+		 */
 		ret = push_insn(t, t + off + 1, FALLTHROUGH, env);
 		if (ret)
 			return ret;
@@ -17209,6 +17230,10 @@ static int visit_insn(int t, struct bpf_verifier_env *env)
 		if (is_may_goto_insn(insn))
 			mark_force_checkpoint(env, t);
 
+		/* 出现了条件跳转，将其中的一个分支设置为fallthrough进行push，
+		 * 如果成功了的话，就将另外一个分支设置为branch进行push。这样的话，
+		 * 会先走branch的分支，走完了之后会pop到fallthrough的分支。
+		 */
 		ret = push_insn(t, t + 1, FALLTHROUGH, env);
 		if (ret)
 			return ret;
@@ -17227,10 +17252,12 @@ static int check_cfg(struct bpf_verifier_env *env)
 	int ex_insn_beg, i, ret = 0;
 	bool ex_done = false;
 
+	/* 为每条指令分配一个int类型的保存状态信息的内存 */
 	insn_state = env->cfg.insn_state = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
 	if (!insn_state)
 		return -ENOMEM;
 
+	/* 为每条指令分配一个int类型的保存堆栈信息的内存 */
 	insn_stack = env->cfg.insn_stack = kvcalloc(insn_cnt, sizeof(int), GFP_KERNEL);
 	if (!insn_stack) {
 		kvfree(insn_state);
@@ -17241,16 +17268,35 @@ static int check_cfg(struct bpf_verifier_env *env)
 	insn_stack[0] = 0; /* 0 is the first instruction */
 	env->cfg.cur_stack = 1;
 
+	/* 总体来说，这里的逻辑是：
+	 * 
+	 * 每访问一条指令，就将其push到栈中，同时更新这条指令的状态为DISCOVERED，且
+	 * 更新这条指令的类型，是fallthrough还是branch；在指令到达exit的时候，开始
+	 * 一个一个地pop出栈，并将pop过的指令的状态更新为EXPLORED。
+	 * 
+	 * 在push过程中，如果发现存在要被push的指令的状态为DISCOVERED，那么就说明存在
+	 * 回环。
+	 *
+	 * 从这里可以看出来，DISCOVERED代表着当前指令在栈中，EXPLORED代表这个指令
+	 * pop过。
+	 *
+	 * 需要注意的是，对于有root权限的用户，允许出现back edge，这也是bound loop
+	 * 发挥作用的原理，即允许出现回环。
+	 */
 walk_cfg:
 	while (env->cfg.cur_stack > 0) {
 		int t = insn_stack[env->cfg.cur_stack - 1];
 
 		ret = visit_insn(t, env);
 		switch (ret) {
+		/* 返回 DONE_EXPLORING 的话，代表当前的branch走到了尽头，可以将当前
+		 * 的insn进行pop了。
+		 */
 		case DONE_EXPLORING:
 			insn_state[t] = EXPLORED;
 			env->cfg.cur_stack--;
 			break;
+		/* 当前执行了push操作，且还要fallthrough到下一条指令。 */
 		case KEEP_EXPLORING:
 			break;
 		default:
@@ -19051,6 +19097,10 @@ static int do_check(struct bpf_verifier_env *env)
 		u8 class;
 		int err;
 
+		/* 进行所有的指令的遍历处理。这里会先根据指令的index取出对应的指令，
+		 * 检查处理过的指令的数量有没有达到上限。
+		 */
+
 		/* reset current history entry on each new instruction */
 		env->cur_hist_ent = NULL;
 
@@ -19072,7 +19122,11 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		state->last_insn_idx = env->prev_insn_idx;
-
+		/* 如果当前的指令是个修剪点（在cfg检查过程中识别并设置的，一般存在
+		 * branch会设置这个），那么就尝试对这个指令进行修剪，这个机制有点
+		 * 复杂，详细的设计在这里：
+		 *   http://vger.kernel.org/bpfconf2019.html#session-1
+		 */
 		if (is_prune_point(env, env->insn_idx)) {
 			err = is_state_visited(env, env->insn_idx);
 			if (err < 0)
@@ -22299,6 +22353,10 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	env->prev_linfo = NULL;
 	env->pass_cnt++;
 
+	/* 初始化检查器的状态信息。这里的subprog如果是0的话，就代表当前的prog是
+	 * main prog。在调用do_check之前，这里会将当前的栈帧设置为0，并将reg1
+	 * 的类型初始化为PTR_TO_CTX，清除该寄存器的tnum,设置为0。
+	 */
 	state = kzalloc(sizeof(struct bpf_verifier_state), GFP_KERNEL);
 	if (!state)
 		return -ENOMEM;
@@ -23312,14 +23370,14 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	}
 
 	/* 基于深度优先算法来对BPF程序中的loop进行检查。这里检查的逻辑是：在有向图
-	 * 中存在往后走的指令。
+	 * 中存在往后走的指令。管理员可以进行loop。
 	 */
 	ret = check_cfg(env);
 	if (ret < 0)
 		goto skip_full_check;
 
 	/* 基于BTF来对要attach到的目标进行检查。这个函数主要是针对trampoline
-	 * 类型的BPF程序的。
+	 * 类型的BPF程序的，这里同时会进行trampoline的创建，并设置到prog上。
 	 */
 	ret = check_attach_btf_id(env);
 	if (ret)
@@ -23329,6 +23387,7 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
+	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。 */
 	ret = do_check_main(env);
 	ret = ret ?: do_check_subprogs(env);
 
