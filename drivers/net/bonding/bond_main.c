@@ -1277,6 +1277,11 @@ void bond_change_active_slave(struct bonding *bond, struct slave *new_active)
 
 	ASSERT_RTNL();
 
+	/* active slave切换的函数。对于backup模式，这里会在需要的时候发送免费
+	 * ARP（默认行为）。可以通过num_grat_arp参数来关闭这一行为，即将该参数
+	 * 设置为0。
+	 */
+
 	old_active = rtnl_dereference(bond->curr_active_slave);
 
 	if (old_active == new_active)
@@ -1330,6 +1335,9 @@ void bond_change_active_slave(struct bonding *bond, struct slave *new_active)
 			bond_set_slave_inactive_flags(old_active,
 						      BOND_SLAVE_NOTIFY_NOW);
 
+		/* 主备切换的时候，如果启用了fail_over_mac，那么就会进入到
+		 * bond_do_fail_over_mac的处理逻辑。
+		 */
 		if (new_active) {
 			bool should_notify_peers = false;
 
