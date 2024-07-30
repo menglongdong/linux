@@ -616,6 +616,7 @@ mprotect_fixup(struct vma_iterator *vmi, struct mmu_gather *tlb,
 	if (!can_modify_vma(vma))
 		return -EPERM;
 
+	/* 这个vma的标志和目标的标志一致，不需要进行fixup操作。 */
 	if (newflags == oldflags) {
 		*pprev = vma;
 		return 0;
@@ -751,6 +752,9 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		goto out;
 
 	vma_iter_init(&vmi, current->mm, start);
+	/* 找到当前要保护的内存域的起始vma，以及这个起始vma前面的一个vma。这个主要
+	 * 是用于vma的fixup。
+	 */
 	vma = vma_find(&vmi, end);
 	error = -ENOMEM;
 	if (!vma)
@@ -764,6 +768,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 		if (!(vma->vm_flags & VM_GROWSDOWN))
 			goto out;
 	} else {
+		/* 这里说明要保护的内存区域不在范围内 */
 		if (vma->vm_start > start)
 			goto out;
 		if (unlikely(grows & PROT_GROWSUP)) {
@@ -837,6 +842,7 @@ static int do_mprotect_pkey(unsigned long start, size_t len,
 				break;
 		}
 
+		/* 进行vma的fixup操作。 */
 		error = mprotect_fixup(&vmi, &tlb, vma, &prev, nstart, tmp, newflags);
 		if (error)
 			break;
