@@ -151,6 +151,7 @@ struct nexthop {
 
 	u8			protocol;   /* app managing this nh */
 	u8			nh_flags;
+	/* 多路径路由 */
 	bool			is_group;
 
 	refcount_t		refcnt;

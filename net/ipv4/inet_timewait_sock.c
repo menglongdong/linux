@@ -168,6 +168,9 @@ void inet_twsk_hashdance_schedule(struct inet_timewait_sock *tw,
 }
 EXPORT_SYMBOL_GPL(inet_twsk_hashdance_schedule);
 
+/* tw套接口超时后的处理函数。它的逻辑很简单，就是去释放这个tw套接口，没有做任何
+ * 额外的动作。
+ */
 static void tw_timer_handler(struct timer_list *t)
 {
 	struct inet_timewait_sock *tw = from_timer(tw, t, tw_timer);
