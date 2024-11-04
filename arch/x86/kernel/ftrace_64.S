@@ -151,6 +151,7 @@ SYM_FUNC_START(__fentry__)
 SYM_FUNC_END(__fentry__)
 EXPORT_SYMBOL(__fentry__)
 
+/* C代码版本的可以在Documentation/trace/ftrace-design.rst中看到 */
 SYM_FUNC_START(ftrace_caller)
 	/* save_mcount_regs fills in first two parameters */
 	save_mcount_regs
@@ -164,6 +165,7 @@ SYM_FUNC_START(ftrace_caller)
 SYM_INNER_LABEL(ftrace_caller_op_ptr, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	/* Load the ftrace_ops into the 3rd parameter */
+	/* 这个指令也是会在runtime被替换的 */
 	movq function_trace_op(%rip), %rdx
 
 	/* regs go into 4th parameter */
@@ -176,7 +178,9 @@ SYM_INNER_LABEL(ftrace_caller_op_ptr, SYM_L_GLOBAL)
 	CALL_DEPTH_ACCOUNT
 
 SYM_INNER_LABEL(ftrace_call, SYM_L_GLOBAL)
+	/* 这个宏像是一个编译器注释宏，注释这个函数不能被trace，以及没有endbr */
 	ANNOTATE_NOENDBR
+	/* 这个代码更像是会被替换的代码，即会被替换成对应的目标函数。 */
 	call ftrace_stub
 
 	/* Handlers can change the RIP */
@@ -197,6 +201,7 @@ SYM_FUNC_END(ftrace_caller);
 STACK_FRAME_NON_STANDARD_FP(ftrace_caller)
 
 SYM_FUNC_START(ftrace_regs_caller)
+	/* 这一段是保存一些ftrace本身的信息 */
 	/* Save the current flags before any operations that can change them */
 	pushfq
 
@@ -211,7 +216,9 @@ SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
 	/* Load the ftrace_ops into the 3rd parameter */
 	movq function_trace_op(%rip), %rdx
 
-	/* 将寄存器中的值按照pt_regs的格式保存到栈中，rsp是pt_regs的起始地址 */
+	/* 将寄存器中的值按照pt_regs的格式保存到栈中，rsp是pt_regs的起始地址。
+	 * 这一端是做调用ops前的准备工作，把各种参数都准备好，然后调用ops
+	 */
 	/* Save the rest of pt_regs */
 	movq %r15, R15(%rsp)
 	movq %r14, R14(%rsp)
@@ -241,6 +248,7 @@ SYM_INNER_LABEL(ftrace_regs_caller_op_ptr, SYM_L_GLOBAL)
 	CALL_DEPTH_ACCOUNT
 
 SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
+	/* 这一段是真正的要调用ops函数的地方 */
 	ANNOTATE_NOENDBR
 	call ftrace_stub
 
@@ -251,9 +259,11 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	/* Handlers can change the RIP */
 	/* 经过处理后，将pt_regs中的rip保存下来，放到当前栈帧的return ip的位置。
 	 * 通过这种方式，可以实现当前handler处理完成后，直接跳转到目标指令的作
-	 * 用，从而可以跳过origin函数。
+	 * 用，从而可以跳过origin函数。这也是热补丁的实现方式，即可以在callback
+	 * 中来设置要返回的地址，不基于direct call的方式来实现origin call。
 	 */
 	movq RIP(%rsp), %rax
+	/* 把pt_regs中的rip存到了r14的位置？ */
 	movq %rax, MCOUNT_REG_SIZE+8(%rsp)
 
 	/* restore the rest of pt_regs */
@@ -267,10 +277,8 @@ SYM_INNER_LABEL(ftrace_regs_call, SYM_L_GLOBAL)
 	movq ORIG_RAX(%rsp), %rax
 	movq %rax, MCOUNT_REG_SIZE-8(%rsp)
 
-	/*
-	 * If ORIG_RAX is anything but zero, make this a call to that.
-	 * See arch_ftrace_set_direct_caller().
-	 */
+	/* 如果ORIG_RAX寄存器里面有值，那么就进行跳转，并调用其中的值作为函数。 */
+	 
 	testq	%rax, %rax
 SYM_INNER_LABEL(ftrace_regs_caller_jmp, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
@@ -288,6 +296,9 @@ SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	ANNOTATE_NOENDBR
 	RET
 
+	/* 这里就是direct call实现的地方。先把保存起来的寄存器的值恢复，再将保存
+	 * 的flags等信息恢复，
+	 */
 	/* Swap the flags with orig_rax */
 1:	movq MCOUNT_REG_SIZE(%rsp), %rdi
 	movq %rdi, MCOUNT_REG_SIZE-8(%rsp)
@@ -307,6 +318,9 @@ SYM_INNER_LABEL(ftrace_regs_caller_end, SYM_L_GLOBAL)
 	CALL .Ldo_rebalance
 	int3
 .Ldo_rebalance:
+	/* 这个代码应该是跳过当前的栈帧，然后直接jump到目标函数开始执行。可是为什么
+	 * 这里没有看到jump的指令呢？
+	 */
 	add $8, %rsp
 	ALTERNATIVE __stringify(RET), \
 		    __stringify(ANNOTATE_UNRET_SAFE; ret; int3), \
@@ -322,6 +336,9 @@ SYM_FUNC_END(ftrace_stub_direct_tramp)
 
 #else /* ! CONFIG_DYNAMIC_FTRACE */
 
+/* 不支持动态ftrace的情况下，默认的ftrace的处理函数。可以看出来，这里会直接调用
+ * 全局的ftrace_trace_function函数
+ */
 SYM_FUNC_START(__fentry__)
 	CALL_DEPTH_ACCOUNT
 

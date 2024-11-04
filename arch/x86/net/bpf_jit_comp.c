@@ -569,6 +569,7 @@ static int emit_patch(u8 **pprog, void *func, void *ip, u8 opcode)
 	return 0;
 }
 
+/* 生成一条call func的指令，并存到pprog里。这里的func是为了判断call指令的类型 */
 static int emit_call(u8 **pprog, void *func, void *ip)
 {
 	return emit_patch(pprog, func, ip, 0xE8);
@@ -598,6 +599,9 @@ static int __bpf_arch_text_poke(void *ip, enum bpf_text_poke_type t,
 	int ret;
 
 	prog = old_insn;
+	/* 这里主要是做检查的作用，并没有发挥什么实质的作用，用来用于后面的检查
+	 * 当前IP处的指令是否和预期一致。
+	 */
 	if (old_addr) {
 		ret = t == BPF_MOD_CALL ?
 		      emit_call(&prog, old_addr, ip) :
