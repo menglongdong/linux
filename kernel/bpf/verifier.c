@@ -14978,8 +14978,13 @@ static int check_alu_op(struct bpf_verifier_env *env, struct bpf_insn *insn)
 	u8 opcode = BPF_OP(insn->code);
 	int err;
 
+	/* 处理所有的的ALU相关的指令，包括合法性的检查、bound的跟踪等 */
+
 	if (opcode == BPF_END || opcode == BPF_NEG) {
 		if (opcode == BPF_NEG) {
+			/* 对于取负数操作，指令中的源操作数需要为常量且为0，立即数
+			 * 和offset等字段需要都为0。
+			 */
 			if (BPF_SRC(insn->code) != BPF_K ||
 			    insn->src_reg != BPF_REG_0 ||
 			    insn->off != 0 || insn->imm != 0) {
@@ -19099,7 +19104,8 @@ static int do_check(struct bpf_verifier_env *env)
 		int err;
 
 		/* 进行所有的指令的遍历处理。这里会先根据指令的index取出对应的指令，
-		 * 检查处理过的指令的数量有没有达到上限。
+		 * 检查处理过的指令的数量有没有达到上限。这里的上限是为了防止死循环
+		 * 兜底的，在前面会通过状态机制来检查是否存在可能的死循环。
 		 */
 
 		/* reset current history entry on each new instruction */
@@ -19129,6 +19135,9 @@ static int do_check(struct bpf_verifier_env *env)
 		 *   http://vger.kernel.org/bpfconf2019.html#session-1
 		 */
 		if (is_prune_point(env, env->insn_idx)) {
+			/* 修剪点的逻辑，这里会检查是否存在无限循环，这个是通过检查
+			 * 状态是否发生变化来实现的。
+			 */
 			err = is_state_visited(env, env->insn_idx);
 			if (err < 0)
 				return err;
@@ -19147,12 +19156,16 @@ static int do_check(struct bpf_verifier_env *env)
 			}
 		}
 
+		/* 如果当前指令是一个branch指令，那么就将其入栈。这个是在cfg检查的
+		 * 时候设置的。这里的branch一定是条件跳转，且条件不可推断。
+		 */
 		if (is_jmp_point(env, env->insn_idx)) {
 			err = push_insn_history(env, state, 0, 0);
 			if (err)
 				return err;
 		}
 
+		/* 检查当前是否有信号需要处理，已经是否需要进行调度 */
 		if (signal_pending(current))
 			return -EAGAIN;
 
@@ -19186,6 +19199,9 @@ static int do_check(struct bpf_verifier_env *env)
 			env->prev_log_pos = env->log.end_pos;
 		}
 
+		/* 当前的BPF程序如果是要offload到硬件设备（如网卡），那么就调用
+		 * netdev上的钩子函数来进行验证。
+		 */
 		if (bpf_prog_is_offloaded(env->prog->aux)) {
 			err = bpf_prog_offload_verify_insn(env, env->insn_idx,
 							   env->prev_insn_idx);
@@ -19194,9 +19210,15 @@ static int do_check(struct bpf_verifier_env *env)
 		}
 
 		regs = cur_regs(env);
+		/* 如果当前的指令不是猜测的，那就将其标记为seen。对于没有seen的
+		 * 指令，后面会做消毒处理，即将其修改为nop。
+		 */
 		sanitize_mark_insn_seen(env);
 		prev_insn_idx = env->insn_idx;
 
+		/* 根据特定的指令类型来做特定的检查逻辑，包括计算类、内存读取类、
+		 * 内存写入类、跳转类和位操作类。其中，跳转类应该是最复杂的了。
+		 */
 		if (class == BPF_ALU || class == BPF_ALU64) {
 			err = check_alu_op(env, insn);
 			if (err)
@@ -22356,7 +22378,12 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 
 	/* 初始化检查器的状态信息。这里的subprog如果是0的话，就代表当前的prog是
 	 * main prog。在调用do_check之前，这里会将当前的栈帧设置为0，并将reg1
-	 * 的类型初始化为PTR_TO_CTX，清除该寄存器的tnum,设置为0。
+	 * 的类型初始化为PTR_TO_CTX，清除该寄存器的tnum,设置为0。对于subprog的
+	 * 情况，这里会根据函数的tag等信息，将函数参数的类型等信息设置到对应的寄存器
+	 * 上。
+	 *
+	 * 这里其实就是对do_check()做了一个简单的封装，这里会预先处于一些BTF相关
+	 * 的内容。
 	 */
 	state = kzalloc(sizeof(struct bpf_verifier_state), GFP_KERNEL);
 	if (!state)
@@ -22378,6 +22405,9 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 	state->last_insn_idx = -1;
 
 	regs = state->frame[state->curframe]->regs;
+	/* 这里可以看出来，TYPE_EXT可以当做subprog来对待，因为它本身就是用来代替
+	 * subprog的。
+	 */
 	if (subprog || env->prog->type == BPF_PROG_TYPE_EXT) {
 		const char *sub_name = subprog_name(env, subprog);
 		struct bpf_subprog_arg_info *arg;
@@ -22388,6 +22418,7 @@ static int do_check_common(struct bpf_verifier_env *env, int subprog)
 		if (ret)
 			goto out;
 
+		/* 对于异常回调函数，检查其参数是否合法，即参数个数和参数类型 */
 		if (subprog_is_exc_cb(env, subprog)) {
 			state->frame[0]->in_exception_callback_fn = true;
 			/* We have already ensured that the callback returns an integer, just
@@ -23388,7 +23419,9 @@ int bpf_check(struct bpf_prog **prog, union bpf_attr *attr, bpfptr_t uattr, __u3
 	if (ret < 0)
 		goto skip_full_check;
 
-	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。 */
+	/* 这个里面才是主要的针对每一条指令的检查，包括一些convert的工作。先对主
+	 * prog进行检查，然后对subprog进行检查。
+	 */
 	ret = do_check_main(env);
 	ret = ret ?: do_check_subprogs(env);
 
