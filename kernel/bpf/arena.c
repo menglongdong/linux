@@ -42,6 +42,7 @@
 #define GUARD_SZ round_up(1ull << sizeof_field(struct bpf_insn, off) * 8, PAGE_SIZE << 1)
 #define KERN_VM_SZ (SZ_4G + GUARD_SZ)
 
+/* bpf_arena是一种在BPF中动态分配内存（page页）的机制。 */
 struct bpf_arena {
 	struct bpf_map map;
 	u64 user_vm_start;
