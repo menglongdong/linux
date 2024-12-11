@@ -1688,6 +1688,9 @@ static rx_handler_result_t bond_handle_frame(struct sk_buff **pskb)
 	slave = bond_slave_get_rcu(skb->dev);
 	bond = slave->bond;
 
+	/* 对于3AD模式，这里会注册个bond_3ad_lacpdu_recv的钩子函数，用来处理LACP的
+	 * 报文。
+	 */
 	recv_probe = READ_ONCE(bond->recv_probe);
 	if (recv_probe) {
 		ret = recv_probe(skb, bond, slave);
@@ -1955,7 +1958,9 @@ void bond_xdp_set_features(struct net_device *bond_dev)
 	xdp_set_features_flag(bond_dev, val);
 }
 
-/* enslave device <slave> to bond device <master> */
+/* 在将某个nic的master设置为bond的时候，会调用这个函数将其加入到这个bond的slave
+ * 列表中。
+ */
 int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 		 struct netlink_ext_ack *extack)
 {
@@ -1966,6 +1971,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	int link_reporting;
 	int res = 0, i;
 
+	/* 本身就是master的nic不能作为slave，就像bridge设备 */
 	if (slave_dev->flags & IFF_MASTER &&
 	    !netif_is_bond_master(slave_dev)) {
 		BOND_NL_ERR(bond_dev, extack,
@@ -1979,7 +1985,7 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 		slave_warn(bond_dev, slave_dev, "no link monitoring support\n");
 	}
 
-	/* already in-use? */
+	/* slave上面已经注册了handler，不能再作为slave了 */
 	if (netdev_is_rx_handler_busy(slave_dev)) {
 		SLAVE_NL_ERR(bond_dev, slave_dev, extack,
 			     "Device is in use and cannot be enslaved");
@@ -2028,6 +2034,9 @@ int bond_enslave(struct net_device *bond_dev, struct net_device *slave_dev,
 	 * ether type (eg ARPHRD_ETHER and ARPHRD_INFINIBAND) share the same bond
 	 */
 	if (!bond_has_slaves(bond)) {
+		/* bond刚创建的时候，type应该为0，因此会走这里的逻辑，将第一个slave
+		 * 的信息设置到自己身上。
+		 */
 		if (bond_dev->type != slave_dev->type) {
 			slave_dbg(bond_dev, slave_dev, "change device type from %d to %d\n",
 				  bond_dev->type, slave_dev->type);
@@ -5098,6 +5107,10 @@ static netdev_tx_t bond_xmit_roundrobin(struct sk_buff *skb,
 	struct bonding *bond = netdev_priv(bond_dev);
 	struct slave *slave;
 
+	/* 获取要处理报文的slave，这里是根据packets_per_slave参数来决定的。如果
+	 * 参数是0，那么就纯随机地选取slave；否则，每当slave处理完packets_per_slave
+	 * 个报文后就轮转到下一个slave。
+	 */
 	slave = bond_xmit_roundrobin_slave_get(bond, skb);
 	if (likely(slave))
 		return bond_dev_queue_xmit(bond, skb, slave->dev);
@@ -5323,6 +5336,10 @@ static netdev_tx_t bond_3ad_xor_xmit(struct sk_buff *skb,
 	struct slave *slave;
 
 	slaves = rcu_dereference(bond->usable_slaves);
+	/* 从可用的slave中哈希出来一个slave，可以看出来对于3ad模式，发送方向是保证
+	 * 流的可靠性的。随后，就利用这个slave将报文发送出去。这里可以看出来，发送的时候
+	 * 3ad是没有什么特殊操作的。
+	 */
 	slave = bond_xmit_3ad_xor_slave_get(bond, skb, slaves);
 	if (likely(slave))
 		return bond_dev_queue_xmit(bond, skb, slave->dev);
@@ -5422,6 +5439,7 @@ static u16 bond_select_queue(struct net_device *dev, struct sk_buff *skb,
 	return txq;
 }
 
+/* 这个函数好像特定场景才会使用，感觉可以忽略。 */
 static struct net_device *bond_xmit_get_slave(struct net_device *master_dev,
 					      struct sk_buff *skb,
 					      bool all_slaves)

@@ -1714,6 +1714,7 @@ static void tcp_v4_init_req(struct request_sock *req,
 	struct inet_request_sock *ireq = inet_rsk(req);
 	struct net *net = sock_net(sk_listener);
 
+	/* 可以看出来，对于IPv4，TCP套接口中的IPv4和IPv6都会被设置的。 */
 	sk_rcv_saddr_set(req_to_sk(req), ip_hdr(skb)->daddr);
 	sk_daddr_set(req_to_sk(req), ip_hdr(skb)->saddr);
 	RCU_INIT_POINTER(ireq->ireq_opt, tcp_v4_save_options(net, skb));
@@ -2239,7 +2240,9 @@ int tcp_v4_rcv(struct sk_buff *skb)
 {
 	struct net *net = dev_net(skb->dev);
 	enum skb_drop_reason drop_reason;
+	/* vrf网卡的index */
 	int sdif = inet_sdif(skb);
+	/* 进来的那个网卡的index */
 	int dif = inet_iif(skb);
 	const struct iphdr *iph;
 	const struct tcphdr *th;
@@ -2278,6 +2281,7 @@ int tcp_v4_rcv(struct sk_buff *skb)
 	th = (const struct tcphdr *)skb->data;
 	iph = ip_hdr(skb);
 lookup:
+	/* 这里找出来的可能是个IPv6的套接口。 */
 	sk = __inet_lookup_skb(net->ipv4.tcp_death_row.hashinfo,
 			       skb, __tcp_hdrlen(th), th->source,
 			       th->dest, sdif, &refcounted);

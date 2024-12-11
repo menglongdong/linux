@@ -7275,6 +7275,9 @@ static int check_stack_access_within_bounds(
 	else
 		err_extra = " write to";
 
+	/* 这里根据reg的bound和偏移以及访问的尺寸，来计算出对应的访问的可能的
+	 * 边界。
+	 */
 	if (tnum_is_const(reg->var_off)) {
 		min_off = (s64)reg->var_off.value + off;
 		max_off = min_off + access_size;
@@ -7289,6 +7292,9 @@ static int check_stack_access_within_bounds(
 		max_off = reg->smax_value + off + access_size;
 	}
 
+	/* 这里主要是检查读操作的左边界在有效的stack范围内，以及右边界的合法性
+	 * （不能超过栈顶）。
+	 */
 	err = check_stack_slot_within_bounds(env, min_off, state, type);
 	if (!err && max_off > 0)
 		err = -EINVAL; /* out of stack access into non-negative offsets */
@@ -7436,6 +7442,14 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 	} else if (base_type(reg->type) == PTR_TO_MEM) {
 		bool rdonly_mem = type_is_rdonly_mem(reg->type);
 
+		/* 对PTR_TO_MEM的访问进行检查，这里已经在适当的时候（比如函数
+		 * 返回值、函数参数等）对reg中的内存长度等信息进行了设置。这里
+		 * 对应的类型是void *类型的无结构类型的指针。
+		 *
+		 * PTR_TO_MEM不能将指针类型的变量保存到memory中。这里做的检查
+		 * 比较简单，就检查读写访问是否在对应的范围内。读取的内容会将
+		 * reg设置为unknown。
+		 */
 		if (type_may_be_null(reg->type)) {
 			verbose(env, "R%d invalid mem access '%s'\n", regno,
 				reg_type_str(env, reg->type));
@@ -7464,6 +7478,10 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		enum bpf_reg_type reg_type = SCALAR_VALUE;
 		struct btf *btf = NULL;
 		u32 btf_id = 0;
+
+		/* 对于ctx的访问，这里就比较复杂啦，这里会调用每个类型的BPF程序
+		 * 的is_valid_access钩子函数来进行ctx访问的检查。
+		 */
 
 		if (t == BPF_WRITE && value_regno >= 0 &&
 		    is_pointer_value(env, value_regno)) {
@@ -7520,6 +7538,7 @@ static int check_mem_access(struct bpf_verifier_env *env, int insn_idx, u32 regn
 		if (err)
 			return err;
 
+		/* 进行具体的读写检查，这里会涉及到reg的spill（写的时候） */
 		if (t == BPF_READ)
 			err = check_stack_read(env, regno, off, size,
 					       value_regno);
@@ -13377,6 +13396,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 		mark_reg_unknown(env, regs, BPF_REG_0);
 		mark_btf_func_reg_size(env, BPF_REG_0, t->size);
 	} else if (btf_type_is_ptr(t)) {
+		/* 这个是kfunc的返回值的btf_type */
 		ptr_type = btf_type_skip_modifiers(desc_btf, t->type, &ptr_type_id);
 
 		if (meta.btf == btf_vmlinux && btf_id_set_contains(&special_kfunc_set, meta.func_id)) {

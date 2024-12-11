@@ -96,6 +96,9 @@ static inline int compute_score(struct sock *sk, const struct net *net,
 {
 	int score = -1;
 
+	/* 套接口查找的时候，IPv4的报文可以查找IPv6的套接口，但是IPv6的报文只能
+	 * 查找IPv6的套接口。
+	 */
 	if (net_eq(sock_net(sk), net) && inet_sk(sk)->inet_num == hnum &&
 	    sk->sk_family == PF_INET6) {
 		if (!ipv6_addr_equal(&sk->sk_v6_rcv_saddr, daddr))
