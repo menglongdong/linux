@@ -2472,6 +2472,11 @@ void netlink_ack(struct sk_buff *in_skb, struct nlmsghdr *nlh, int err,
 	unsigned int flags = 0;
 	size_t tlvlen;
 
+	/* 这个函数用于将一些信息放到netlink套接口的错误队列中，用于作为当前请求的相应
+	 * 数据，用户态可以从错误队列中获取对应的数据。里面存放的是netlink格式的数据，
+	 * 其中data部分是nlmsgerr结构。
+	 */
+
 	/* Error messages get the original request appened, unless the user
 	 * requests to cap the error message, and get extra error data if
 	 * requested.
