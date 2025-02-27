@@ -1136,6 +1136,7 @@ struct ftrace_page {
 #define ENTRY_SIZE sizeof(struct dyn_ftrace)
 #define ENTRIES_PER_PAGE (PAGE_SIZE / ENTRY_SIZE)
 
+/* mrecord开始的地方 */
 static struct ftrace_page	*ftrace_pages_start;
 static struct ftrace_page	*ftrace_pages;
 
@@ -7068,6 +7069,9 @@ static int ftrace_process_locs(struct module *mod,
 	unsigned long flags = 0; /* Shut up gcc */
 	int ret = -ENOMEM;
 
+	/* record的数量，可以看出来每个record占用了8个字节，也就是说每个record代表
+	 * 一个指针。
+	 */
 	count = end - start;
 
 	if (!count)
@@ -7085,6 +7089,7 @@ static int ftrace_process_locs(struct module *mod,
 		test_is_sorted(start, count);
 	}
 
+	/* 根据record的数量来分配对应的内存。所有的内存使用链表的方式来管理的。 */
 	start_pg = ftrace_allocate_pages(count);
 	if (!start_pg)
 		return -ENOMEM;
