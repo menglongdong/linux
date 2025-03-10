@@ -451,6 +451,10 @@ static int bpf_trampoline_update(struct bpf_trampoline *tr, bool lock_direct_mut
 
 #ifdef CONFIG_DYNAMIC_FTRACE_WITH_DIRECT_CALLS
 again:
+	/* 如果当前的BPF程序和其他模块共享这个函数（比如livepatch），这种情况下
+	 * 会设置这个BPF_TRAMP_F_ORIG_STACK的标志。这种情况下，不会调用origin，
+	 * 而是会直接调用栈里面存储的ip（会进行indirect call）。
+	 */
 	if ((tr->flags & BPF_TRAMP_F_SHARE_IPMODIFY) &&
 	    (tr->flags & BPF_TRAMP_F_CALL_ORIG))
 		tr->flags |= BPF_TRAMP_F_ORIG_STACK;

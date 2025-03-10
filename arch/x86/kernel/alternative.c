@@ -902,6 +902,8 @@ void __init_or_module noinline apply_seal_endbr(s32 *start, s32 *end, struct mod
 {
 	s32 *s;
 
+	/* 这里的地址集合，是真正的函数的地址，因此这里addr - 16获取到的就是cfi的地址 */
+
 	for (s = start; s < end; s++) {
 		void *addr = (void *)s + *s;
 		void *wr_addr = module_writable_address(mod, addr);
@@ -1215,6 +1217,12 @@ static int cfi_rewrite_preamble(s32 *start, s32 *end, struct module *mod)
 {
 	s32 *s;
 
+	/* 修改每个函数前面的padding空间的信息。这里的start_cfi里面存储的
+	 * 是需要被修改的函数的偏移，获取到的是原始的函数的地址，即：
+	 *   addr - padding
+	 * 在进行修改的时候，它默认为这个地址就是cfi伪指令的地址。并且在FINEIBT
+	 * 修正的时候，也是直接从这个地址开始进行修改的，要修改的字节数为16个。
+	 */
 	for (s = start; s < end; s++) {
 		void *addr = (void *)s + *s;
 		void *wr_addr = module_writable_address(mod, addr);
@@ -1241,7 +1249,8 @@ static void cfi_rewrite_endbr(s32 *start, s32 *end, struct module *mod)
 		void *addr = (void *)s + *s;
 		void *wr_addr = module_writable_address(mod, addr);
 
-		poison_endbr(addr + 16, wr_addr + 16, false);
+		poison_endbr(addr + CONFIG_FUNCTION_ALIGNMENT,
+			     wr_addr + CONFIG_FUNCTION_ALIGNMENT, false);
 	}
 }
 
@@ -1296,6 +1305,10 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 	bool builtin = mod ? false : true;
 	int ret;
 
+	/* 这里的start_retpoline代表的应该是存放着调用者的集合，start_cfi代表是
+	 * 被调用的集合。
+	 */
+
 	if (WARN_ONCE(fineibt_preamble_size != 16,
 		      "FineIBT preamble wrong size: %ld", fineibt_preamble_size))
 		return;
@@ -1310,6 +1323,9 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 	 * Rewrite the callers to not use the __cfi_ stubs, such that we might
 	 * rewrite them. This disables all CFI. If this succeeds but any of the
 	 * later stages fails, we're without CFI.
+	 */
+	/* 这里应该是修改caller那里的代码，直接不进行CFI的对比，直接跳转到要进行
+	 * call的那条指令那里。
 	 */
 	ret = cfi_disable_callers(start_retpoline, end_retpoline, mod);
 	if (ret)
@@ -1338,6 +1354,7 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 		return;
 
 	case CFI_KCFI:
+		/* 恢复原来的call指令 */
 		ret = cfi_enable_callers(start_retpoline, end_retpoline, mod);
 		if (ret)
 			goto err;
@@ -1347,12 +1364,14 @@ static void __apply_fineibt(s32 *start_retpoline, s32 *end_retpoline,
 		return;
 
 	case CFI_FINEIBT:
-		/* place the FineIBT preamble at func()-16 */
+		/* place the FineIBT preamble at func()-CONFIG_FUNCTION_ALIGNMENT */
+		/* 修改被调用的函数padding那里的信息 */
 		ret = cfi_rewrite_preamble(start_cfi, end_cfi, mod);
 		if (ret)
 			goto err;
 
-		/* rewrite the callers to target func()-16 */
+		/* rewrite the callers to target func()-CONFIG_FUNCTION_ALIGNMENT */
+		/* 修改调用者那里的信息 */
 		ret = cfi_rewrite_callers(start_retpoline, end_retpoline, mod);
 		if (ret)
 			goto err;
