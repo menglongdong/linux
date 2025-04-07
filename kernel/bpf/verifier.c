@@ -13220,6 +13220,7 @@ static int check_kfunc_call(struct bpf_verifier_env *env, struct bpf_insn *insn,
 	if (!insn->imm)
 		return 0;
 
+	/* 根据指令中的imm，获取对应的kfunc的btf信息。 */
 	err = fetch_kfunc_meta(env, insn, &meta, &func_name);
 	if (err == -EACCES && func_name)
 		verbose(env, "calling kernel function %s is not allowed\n", func_name);
